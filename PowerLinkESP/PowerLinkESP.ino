@@ -2,7 +2,7 @@
 #include <EEPROM.h>
 #include <LittleFS.h>
 #include <ESPAsyncTCP.h>
-#include <ESPAsyncWebServer.h>
+#include <ESPAsyncWebSrv.h>
 #include <SoftwareSerial.h>
 #include <TaskScheduler.h>
 #include <ArduinoOTA.h>
@@ -26,12 +26,34 @@ SoftwareSerial virtualSerial(RXPin, TXPin);
 Scheduler runner;
 AsyncWebServer server(80);
 
-String voltageCommand = "<12000000000>"; // Default voltage command
-String currentCommand = "<14000000000>"; // Default current command
+String voltageCommand = "<12000000000>"; // Read voltage command
+String currentCommand = "<14000000000>"; // Read current command
 
 float voltageValue = 0.0;
 float currentValue = 0.0;
 float powerValue = 0.0;
+
+void sendNewOutputVoltage(String newOutVoltage) {
+  // <11xxxxxx000> where xxx,xxx is the voltage value
+  // Split the input string by the decimal point
+  int dotIndex = newOutVoltage.indexOf('.');
+  String intPart = dotIndex != -1 ? newOutVoltage.substring(0, dotIndex) : newOutVoltage;
+  String decPart = dotIndex != -1 ? newOutVoltage.substring(dotIndex + 1) : "0";
+
+  // Pad integer and decimal parts to 3 digits
+  while (intPart.length() < 3) intPart = "0" + intPart;
+  while (decPart.length() < 3) decPart += "0";
+  decPart = decPart.substring(0, 3); // Ensure only 3 digits
+
+  // Format: <11VVVvvv000>
+  String formattedVoltage = "<1" + intPart + decPart + "000>";
+  virtualSerial.print(formattedVoltage);
+  voltageCommand = formattedVoltage;
+}
+
+void sendNewOutputCurrent(String newOutCurrent){
+  
+}
 
 void sendVoltageCommand() {
   String response = sendCommandAndWait(voltageCommand);
@@ -57,14 +79,14 @@ String sendCommandAndWait(String command) {
       return "";
     }
   }
-  // Read response
   String response = virtualSerial.readStringUntil('>');
+  Serial.println("Power supply response read!");
   return response;
 }
 
 void handleVoltageCommand(String response) {
   // Extract data bits from the response
-  int voltage = response.substring(4, 9).toInt();
+  int voltage = response.substring(3, 9).toInt();   //Correction from (4,9) to (3,9) as some power supply can get up to 800Vdc!
   // Calculate voltage value (assuming data bits are in the format provided)
   voltageValue = voltage / 1000.0;
   // Calculate power
@@ -93,6 +115,7 @@ void setup() {
   Serial.begin(9600);
   // Initialize SoftwareSerial
   virtualSerial.begin(9600);
+  virtualSerial.setTimeout(2000);
   // Initialize EEPROM
   EEPROM.begin(512);
 
@@ -142,6 +165,9 @@ void setup() {
   });
   server.on("/setconfig", HTTP_POST, [](AsyncWebServerRequest *request) {
     handleSetConfig(request);
+  });
+  server.on("/setoutput", HTTP_POST, [](AsyncWebServerRequest *request) {
+    handleNewOuput(request);
   });
   server.on("/chart.js", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (LittleFS.exists("/chart.js")) {
@@ -306,6 +332,14 @@ void handleSetConfig(AsyncWebServerRequest *request) {
     Serial.println("\nConnection to new WiFi failed!");
     request->send(200, "text/plain", "Configuration failed. Unable to connect to WiFi.");
   }
+}
+
+void handleNewOuput(AsyncWebServerRequest *request){
+  String newVoltage = request->arg("newVoltage");
+  String newCurrent = request->arg("newCurrent");
+
+  sendNewOutputVoltage(newOutVoltage);
+  sendNewOutputCurrent(newOutCurrent);
 }
 
 String readStringFromEEPROM(int addr) {

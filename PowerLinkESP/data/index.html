@@ -332,6 +332,17 @@
 			font-size: 1.5em;
 		}
 
+		.output-config-box {
+			border: 2px solid;
+			background-color: #382e26;
+			padding: 20px;
+			margin: 10px;
+			border-radius: 10px;
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+		}
+
 		.input-group {
 			display: flex;
 			justify-content: center;
@@ -458,29 +469,26 @@
 			<h1>POWER: <span class='powerDisplay'></span> W</h1>
 		</div>
 	</div>
-
 	<div id="indicatorVoltage" class="alert voltage" style="display:none; opacity: 0;">
 		<span class="closebtn" onclick="this.parentElement.style.opacity='0'; setTimeout(() => {this.parentElement.style.display='none';		
 		}, 600);">&times;</span>
 		<strong>VOLTAGE ALARM!</strong> Indicates that Voltage Threshold is reached!
 	</div>
-
 	<div id="indicatorCurrent" class="alert current" style="display:none; opacity: 0;">
 		<span class="closebtn" onclick="this.parentElement.style.opacity='0'; setTimeout(() => {this.parentElement.style.display='none';		
 		}, 600);">&times;</span>
 		<strong>CURRENT ALARM!</strong> Indicates that Current Threshold is reached!
 	</div>
-
 	<div id="indicatorPower" class="alert power" style="display:none; opacity: 0;">
 		<span class="closebtn" onclick="this.parentElement.style.opacity='0'; setTimeout(() => {this.parentElement.style.display='none';		
 		}, 600);">&times;</span>
 		<strong>POWER ALARM!</strong> Indicates that Power Threshold is reached!
 	</div>
-
 	<div class="tab">
 		<button class="tablinks" onclick="openTab(event, 'ChartDash')" id="defaultOpen">All Charts</button>
 		<button class="tablinks" onclick="openTab(event, 'ChartConfig')">Charts Configuration</button>
 		<button class="tablinks" onclick="openTab(event, 'alarmsConfig')">Alarms</button>
+		<button class="tablinks" onclick="openTab(event, 'psuControl')">Control</button>
 	</div>
 	<div id="ChartDash" class="tabcontent">
 		<div class="wrapper">
@@ -628,6 +636,26 @@
 			<div class="input-group">
 				<label for="activatePower">Activate Alarm:</label>
 				<input type="checkbox" id="activatePower">
+			</div>
+		</div>
+	</div>
+	<div id="psuControl" class="tabcontent output-config">
+		<div class="output-config-box">
+			<h2>PSU Output Control</h2>
+			<div class="input-group" style="display: block;">
+				<div class="tooltip">
+					<label for="outVoltage">Voltage (V)</label>
+					<span class="tooltiptext">Set the maximum output voltage of the power supply.</span>
+					<input class="voltage" type="number" id="outVoltage" value="0.0" min="0.0" max="1000.0" step="0.1">
+				</div>
+				<div class="tooltip">
+					<label for="outCurrent">Current (A)</label>
+					<span class="tooltiptext">Set the maximum output current of the power supply.</span>
+					<input class="input-outCurrent" type="number" id="outCurrent" value="0.0" min="0.0" max="1.1" step="0.1">
+				</div>
+				<div class="tooltip">
+					<button class="button output-config" onclick="newOutputValues()">Apply</button>
+				</div>
 			</div>
 		</div>
 	</div>
@@ -980,7 +1008,6 @@
 		}
 
 		function changePoints() {
-
 			changeUpdateFrequency();
 			var points = parseInt(document.getElementById('points').value);
 			if (isNaN(points) || points <= 0) {
@@ -1015,6 +1042,48 @@
 			// Open Default tab
 			openDefaultTab();
 		}
+		
+		function newOutputValues(){
+			var newOutVoltage = parseInt(document.getElementById('outVoltage').value);
+			var newOutCurrent = parseInt(document.getElementById('outCurrent').value);
+			if (isNaN(newOutVoltage) || newOutVoltage <= 0) {
+				alert("Please enter a valid positive number.");
+				return;
+			}
+			if (isNaN(newOutCurrent) || newOutCurrent <= 0) {
+				alert("Please enter a valid positive number.");
+				return;
+			}
+			
+			// Update the number of points for the charts
+			pushControlData(newOutVoltage, newOutCurrent);
+		}
+
+		function pushControlData(voltage, current) {
+			fetch('/setoutput', {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json'
+				},
+				body: JSON.stringify({
+					voltage: newVoltage,
+					current: newCurrent
+				})
+			})
+			.then(response => {
+				if (!response.ok) {
+					throw new Error('Network response was not ok');
+				}
+				return response.json();
+			})
+			.then(data => {
+				console.log('Control data pushed:', data);
+			})
+			.catch(error => {
+				console.error('Error pushing control data:', error);
+			});
+		}
+		
 		// Show bottom bar when scrolled down, hide when scrolled up and top-dashboard is visible
 		var lastScrollTop = 0;
 		var bottomBar = document.getElementById('bottom-bar');
