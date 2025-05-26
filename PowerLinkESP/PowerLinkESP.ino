@@ -14,6 +14,12 @@
 #define SUBNET_ADDR 96
 #define GATEWAY_ADDR 128
 
+void otaHandler();
+void sendVoltageCommand();
+void sendCurrentCommand();
+void threadSafeVariable();
+void sendNewOutputValues();
+
 // Fallback SSID and password
 String uniqueDeviceName = "LabPowerSupply_" + String(ESP.getChipId());
 const char* fallbackSSID = uniqueDeviceName.c_str();
@@ -21,6 +27,15 @@ const char* fallbackPassword = "12345678"; //Change this default password if you
 
 const int RXPin = D6; // Wemos D1 Mini RX pin
 const int TXPin = D5; // Wemos D1 Mini TX pin
+const int virtualSerialTimeoutVal = 2000;
+
+#define _TASK_THREAD_SAFE        // Enable additional checking for thread safety
+
+Task taskSendVoltage(500, TASK_FOREVER, &sendVoltageCommand);
+Task taskSendCurrent(600, TASK_FOREVER, &sendCurrentCommand);
+Task taskArduinoOTA(200, TASK_FOREVER, &otaHandler);
+Task taskThreadSafeVariable(TASK_IMMEDIATE,TASK_ONCE, &threadSafeVariable);
+Task taskNewOutputValues(TASK_IMMEDIATE,TASK_ONCE, &sendNewOutputValues);
 
 SoftwareSerial virtualSerial(RXPin, TXPin);
 Scheduler runner;
@@ -33,7 +48,89 @@ float voltageValue = 0.0;
 float currentValue = 0.0;
 float powerValue = 0.0;
 
+float tSafevoltageValue = 0.0;
+float tSafecurrentValue = 0.0;
+float tSafepowerValue = 0.0;
+
+String newOutputVoltage = ""; // New output voltage to be set
+String newOutputCurrent = ""; // New output current to be set
+
+bool pcIsMaster = false; // Flag to check if PC is master
+
+void threadSafeVariable(){
+  tSafevoltageValue = voltageValue;
+  tSafecurrentValue = currentValue;
+  tSafepowerValue = powerValue;
+}
+
+void sendNewOutputValues(){
+  sendNewOutputVoltage(newOutputVoltage);
+  sendNewOutputCurrent(newOutputCurrent);
+}
+
+void otaHandler(){
+  ArduinoOTA.handle();
+}
+
+bool controlSupplyOutput(bool enable) {
+  // <07000000000> to enable output, <08000000000> to disable output
+  String command = enable ? "<07000000000>" : "<08000000000>";
+  String response = sendCommandAndWait(command);
+  if (response.isEmpty()) {
+    Serial.println("No ACK/response for command: " + command);
+    return false; // Command failed
+  }
+  return true; // Command succeeded
+}
+
+bool connectPcAsMaster() {
+  // List of commands to send
+
+  erreur il faut gérer le # de commande dans la loop for sinon buffer overflow.
+  String commands[] = {
+    "<09100000000>"
+  };
+
+  for (int i = 0; i < 3; ++i) {
+    String response = sendCommandAndWait(commands[i]);
+    if (response.isEmpty()) {
+      Serial.println("No ACK/response for command: " + commands[i]);
+      pcIsMaster = false; // Reset flag if any command fails
+      return false;
+    }
+    // Optionally, check for specific ACK content here
+  }
+  pcIsMaster = true; // Set flag indicating PC is master
+  return true;
+}
+
+bool disconnectPcAsMaster() {
+  // List of commands to send for disconnection
+  String commands[] = {
+    "<09200000000>"
+  };
+
+  for (int i = 0; i < 1; ++i) {
+    String response = sendCommandAndWait(commands[i]);
+    if (response.isEmpty()) {
+      Serial.println("No ACK/response for command: " + commands[i]);
+      pcIsMaster = false; // Reset flag if command fails
+      return false;
+    }
+    // Optionally, check for specific ACK content here
+  }
+  pcIsMaster = false; // Reset flag indicating PC is no longer master
+  return true;
+}
+
 void sendNewOutputVoltage(String newOutVoltage) {
+  if(!pcIsMaster){
+    if(!connectPcAsMaster()){
+      Serial.println("Failed to connect PC as master. Cannot send new output voltage.");
+      return;
+    }
+  }
+  
   // <11xxxxxx000> where xxx,xxx is the voltage value
   // Split the input string by the decimal point
   int dotIndex = newOutVoltage.indexOf('.');
@@ -46,13 +143,37 @@ void sendNewOutputVoltage(String newOutVoltage) {
   decPart = decPart.substring(0, 3); // Ensure only 3 digits
 
   // Format: <11VVVvvv000>
-  String formattedVoltage = "<1" + intPart + decPart + "000>";
-  virtualSerial.print(formattedVoltage);
-  voltageCommand = formattedVoltage;
+  String formattedVoltage = "<11" + intPart + decPart + "000>";
+  String response = sendCommandAndWait(formattedVoltage);
+  if (response.isEmpty()) {
+    Serial.println("No ACK/response for voltage command: " + formattedVoltage);
+  }
 }
 
 void sendNewOutputCurrent(String newOutCurrent){
-  
+  if(!pcIsMaster){
+    if(!connectPcAsMaster()){
+      Serial.println("Failed to connect PC as master. Cannot send new output current.");
+      return;
+    }
+  }
+
+  // <13xxxxxx000> where xxx,xxx is the current value
+  int dotIndex = newOutCurrent.indexOf('.');
+  String intPart = dotIndex != -1 ? newOutCurrent.substring(0, dotIndex) : newOutCurrent;
+  String decPart = dotIndex != -1 ? newOutCurrent.substring(dotIndex + 1) : "0";
+
+  // Pad integer and decimal parts to 3 digits
+  while (intPart.length() < 3) intPart = "0" + intPart;
+  while (decPart.length() < 3) decPart += "0";
+  decPart = decPart.substring(0, 3); // Ensure only 3 digits
+
+  // Format: <13CCCccc000>
+  String formattedCurrent = "<13" + intPart + decPart + "000>";
+  String response = sendCommandAndWait(formattedCurrent);
+  if (response.isEmpty()) {
+    Serial.println("No ACK/response for current command: " + formattedCurrent);
+  }
 }
 
 void sendVoltageCommand() {
@@ -70,17 +191,25 @@ void sendCurrentCommand() {
 }
 
 String sendCommandAndWait(String command) {
+  static volatile bool inUse = false;
+  while (__atomic_test_and_set(&inUse, __ATOMIC_ACQUIRE)) {
+    delay(1); // Wait until the function is free
+  }
+
+  Serial.println("Commande envoyée: " + command);
   virtualSerial.print(command);
   // Wait for response
   unsigned long startTime = millis();
   while (!virtualSerial.available()) {
-    if (millis() - startTime > 2000) { // Timeout after 2 seconds
+    if (millis() - startTime > virtualSerialTimeoutVal) { // Timeout after 2 seconds
       Serial.println("Timeout occurred while waiting for response from Power supply.");
+      __atomic_clear(&inUse, __ATOMIC_RELEASE);
       return "";
     }
   }
   String response = virtualSerial.readStringUntil('>');
   Serial.println("Power supply response read!");
+  __atomic_clear(&inUse, __ATOMIC_RELEASE);
   return response;
 }
 
@@ -103,19 +232,16 @@ void handleCurrentCommand(String response) {
 }
 
 void handleData(AsyncWebServerRequest *request) {
-  String data = "{\"voltage\": " + String(voltageValue, 3) + ", \"current\": " + String(currentValue, 3) + ", \"power\": " + String(powerValue, 3) + "}";
+  String data = "{\"voltage\": " + String(tSafevoltageValue, 3) + ", \"current\": " + String(tSafecurrentValue, 3) + ", \"power\": " + String(tSafepowerValue, 3) + "}";
   request->send(200, "application/json", data);
+  taskThreadSafeVariable.restartDelayed();
 }
-
-Task taskSendVoltage(500, TASK_FOREVER, &sendVoltageCommand);
-Task taskSendCurrent(600, TASK_FOREVER, &sendCurrentCommand);
-
 void setup() {
   // Initialize Serial Monitor
-  Serial.begin(9600);
+  Serial.begin(115200);
   // Initialize SoftwareSerial
   virtualSerial.begin(9600);
-  virtualSerial.setTimeout(2000);
+  virtualSerial.setTimeout(virtualSerialTimeoutVal);
   // Initialize EEPROM
   EEPROM.begin(512);
 
@@ -132,10 +258,9 @@ void setup() {
   runner.init();
   runner.addTask(taskSendVoltage);
   runner.addTask(taskSendCurrent);
-  
-  // Enable tasks
-  taskSendVoltage.enable();
-  taskSendCurrent.enable();
+  runner.addTask(taskArduinoOTA);
+  runner.addTask(taskThreadSafeVariable);
+  runner.addTask(taskNewOutputValues);
 
   // Check if stored IP, subnet mask, or gateway in EEPROM are missing
   String storedIP = readStringFromEEPROM(IP_ADDR);
@@ -214,17 +339,40 @@ void setup() {
     // Print AP IP address
     Serial.println("IP Address: " + WiFi.softAPIP().toString());
   }
+
+  // Enable tasks
+  taskSendVoltage.enable();
+  taskSendCurrent.enable();
+  taskArduinoOTA.enable();
+  taskThreadSafeVariable.enable();
+  //taskNewOutputValues.enable();
+  Serial.println("Setup complete. Tasks enabled.");
 }
 
 void loop() {
   runner.execute();
-  ArduinoOTA.handle();
 }
 
 void connectWiFi() {
+  Serial.println("Connecting to default WiFi...");
+  WiFi.hostname(uniqueDeviceName.c_str()); // Set a default hostname
+  WiFi.begin("SET_PubWiFi", "Set2011a");
+
+  // Wait for connection to be established
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nConnected to default WiFi!");
+    return; // Exit if connected successfully
+  }
+
   String ssid = readStringFromEEPROM(SSID_ADDR);
   String password = readStringFromEEPROM(PASS_ADDR);
-
   // Attempt to connect to stored WiFi network
   if (ssid.length() > 0 && password.length() > 0) {
     Serial.println("Connecting to stored WiFi...");
@@ -237,7 +385,7 @@ void connectWiFi() {
   }
 
   // Wait for connection to be established
-  int attempts = 0;
+  attempts = 0;
   while (WiFi.status() != WL_CONNECTED && attempts < 20) {
     delay(500);
     Serial.print(".");
@@ -335,11 +483,23 @@ void handleSetConfig(AsyncWebServerRequest *request) {
 }
 
 void handleNewOuput(AsyncWebServerRequest *request){
+  Serial.println("Handling new output request...");
   String newVoltage = request->arg("newVoltage");
   String newCurrent = request->arg("newCurrent");
 
-  sendNewOutputVoltage(newOutVoltage);
-  sendNewOutputCurrent(newOutCurrent);
+  Serial.println("Handling new output request... 2");
+
+  newOutputVoltage = String(newVoltage);
+  newOutputCurrent = String(newCurrent);
+
+  taskNewOutputValues.enableIfNot();
+  
+  //sendNewOutputVoltage(newVoltage);
+  //sendNewOutputCurrent(newCurrent);
+
+  Serial.println("Handling new output request... 3");
+
+  request->send(200, "text/plain", "OK");
 }
 
 String readStringFromEEPROM(int addr) {

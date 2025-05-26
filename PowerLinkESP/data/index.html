@@ -485,10 +485,10 @@
 		<strong>POWER ALARM!</strong> Indicates that Power Threshold is reached!
 	</div>
 	<div class="tab">
-		<button class="tablinks" onclick="openTab(event, 'ChartDash')" id="defaultOpen">All Charts</button>
+		<button class="tablinks" onclick="openTab(event, 'ChartDash')">All Charts</button>
 		<button class="tablinks" onclick="openTab(event, 'ChartConfig')">Charts Configuration</button>
 		<button class="tablinks" onclick="openTab(event, 'alarmsConfig')">Alarms</button>
-		<button class="tablinks" onclick="openTab(event, 'psuControl')">Control</button>
+		<button class="tablinks" onclick="openTab(event, 'psuControl')" id="defaultOpen">Control</button>
 	</div>
 	<div id="ChartDash" class="tabcontent">
 		<div class="wrapper">
@@ -1066,8 +1066,8 @@
 					'Content-Type': 'application/json'
 				},
 				body: JSON.stringify({
-					voltage: newVoltage,
-					current: newCurrent
+					voltage: voltage,
+					current: current
 				})
 			})
 			.then(response => {
