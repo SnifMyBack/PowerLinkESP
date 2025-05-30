@@ -19,6 +19,12 @@ void sendVoltageCommand();
 void sendCurrentCommand();
 void threadSafeVariable();
 void sendNewOutputValues();
+void setPcAsMaster();
+void unsetPcAsMaster();
+bool connectPcAsMaster();
+bool disconnectPcAsMaster();
+void setOutputEnable();
+void setOutputDisable();
 
 // Fallback SSID and password
 String uniqueDeviceName = "LabPowerSupply_" + String(ESP.getChipId());
@@ -27,7 +33,7 @@ const char* fallbackPassword = "12345678"; //Change this default password if you
 
 const int RXPin = D6; // Wemos D1 Mini RX pin
 const int TXPin = D5; // Wemos D1 Mini TX pin
-const int virtualSerialTimeoutVal = 2000;
+const int virtualSerialTimeoutVal = 500;
 
 #define _TASK_THREAD_SAFE        // Enable additional checking for thread safety
 
@@ -36,6 +42,11 @@ Task taskSendCurrent(600, TASK_FOREVER, &sendCurrentCommand);
 Task taskArduinoOTA(200, TASK_FOREVER, &otaHandler);
 Task taskThreadSafeVariable(TASK_IMMEDIATE,TASK_ONCE, &threadSafeVariable);
 Task taskNewOutputValues(TASK_IMMEDIATE,TASK_ONCE, &sendNewOutputValues);
+Task taskSetRemoteAsMaster(TASK_IMMEDIATE,TASK_ONCE, &setPcAsMaster);
+Task taskUnSetRemoteAsMaster(TASK_IMMEDIATE,TASK_ONCE, &unsetPcAsMaster);
+Task taskSetOutputEnable(TASK_IMMEDIATE,TASK_ONCE, &setOutputEnable);
+Task taskSetOutputDisable(TASK_IMMEDIATE,TASK_ONCE, &setOutputDisable);
+
 
 SoftwareSerial virtualSerial(RXPin, TXPin);
 Scheduler runner;
@@ -72,6 +83,14 @@ void otaHandler(){
   ArduinoOTA.handle();
 }
 
+void setOutputEnable(){
+  controlSupplyOutput(true);
+}
+
+void setOutputDisable(){
+  controlSupplyOutput(false);
+}
+
 bool controlSupplyOutput(bool enable) {
   // <07000000000> to enable output, <08000000000> to disable output
   String command = enable ? "<07000000000>" : "<08000000000>";
@@ -83,15 +102,24 @@ bool controlSupplyOutput(bool enable) {
   return true; // Command succeeded
 }
 
-bool connectPcAsMaster() {
-  // List of commands to send
+void setPcAsMaster(){
+  connectPcAsMaster();
+}
 
-  erreur il faut gérer le # de commande dans la loop for sinon buffer overflow.
+void unsetPcAsMaster(){
+  disconnectPcAsMaster();
+}
+
+bool connectPcAsMaster() {
+  if(pcIsMaster){
+    return true;
+  }
+  // List of commands to send
   String commands[] = {
     "<09100000000>"
   };
 
-  for (int i = 0; i < 3; ++i) {
+  for (int i = 0; i < sizeof(commands) / sizeof(commands[0]); ++i) {
     String response = sendCommandAndWait(commands[i]);
     if (response.isEmpty()) {
       Serial.println("No ACK/response for command: " + commands[i]);
@@ -105,12 +133,15 @@ bool connectPcAsMaster() {
 }
 
 bool disconnectPcAsMaster() {
+  if(!pcIsMaster){
+    return true;
+  }
   // List of commands to send for disconnection
   String commands[] = {
     "<09200000000>"
   };
 
-  for (int i = 0; i < 1; ++i) {
+  for (int i = 0; i < sizeof(commands) / sizeof(commands[0]); ++i) {
     String response = sendCommandAndWait(commands[i]);
     if (response.isEmpty()) {
       Serial.println("No ACK/response for command: " + commands[i]);
@@ -207,7 +238,17 @@ String sendCommandAndWait(String command) {
       return "";
     }
   }
-  String response = virtualSerial.readStringUntil('>');
+  // Ignore characters before the first '<'
+  char ch;
+  while (virtualSerial.available()) {
+    ch = virtualSerial.read();
+    if (ch == '<') {
+      break;
+    }
+  }
+  // Now read the rest of the response including '<'
+  String response = "<" + virtualSerial.readStringUntil('>');
+  response += '>'; // Add the closing '>' since readStringUntil does not include it
   Serial.println("Power supply response read!");
   __atomic_clear(&inUse, __ATOMIC_RELEASE);
   return response;
@@ -261,6 +302,10 @@ void setup() {
   runner.addTask(taskArduinoOTA);
   runner.addTask(taskThreadSafeVariable);
   runner.addTask(taskNewOutputValues);
+  runner.addTask(taskSetRemoteAsMaster);
+  runner.addTask(taskUnSetRemoteAsMaster);
+  runner.addTask(taskSetOutputEnable);
+  runner.addTask(taskSetOutputDisable);
 
   // Check if stored IP, subnet mask, or gateway in EEPROM are missing
   String storedIP = readStringFromEEPROM(IP_ADDR);
@@ -293,6 +338,12 @@ void setup() {
   });
   server.on("/setoutput", HTTP_POST, [](AsyncWebServerRequest *request) {
     handleNewOuput(request);
+  });
+  server.on("/setmaster", HTTP_POST, [](AsyncWebServerRequest *request) {
+    handleRemoteCtrl(request);
+  });
+  server.on("/setoutputon", HTTP_POST, [](AsyncWebServerRequest *request) {
+    handleOutputState(request);
   });
   server.on("/chart.js", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (LittleFS.exists("/chart.js")) {
@@ -498,6 +549,34 @@ void handleNewOuput(AsyncWebServerRequest *request){
   //sendNewOutputCurrent(newCurrent);
 
   Serial.println("Handling new output request... 3");
+
+  request->send(200, "text/plain", "OK");
+}
+
+void handleRemoteCtrl(AsyncWebServerRequest *request){
+  Serial.println("Remote ctrl request...");
+  String remoteIsMaster = request->arg("remoteIsMaster");
+
+  if(remoteIsMaster == "true"){
+    taskSetRemoteAsMaster.enableIfNot();
+  }
+  else{
+    taskUnSetRemoteAsMaster.enableIfNot();
+  }
+
+  request->send(200, "text/plain", "OK");
+}
+
+void handleOutputState(AsyncWebServerRequest *request){
+  Serial.println("Output State Request...");
+  String outputIsEnabled = request->arg("outputIsEnabled");
+
+  if(outputIsEnabled == "true"){
+    taskSetOutputEnable.enableIfNot();
+  }
+  else{
+    taskSetOutputDisable.enableIfNot();
+  }
 
   request->send(200, "text/plain", "OK");
 }
