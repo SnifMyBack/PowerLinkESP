@@ -1090,7 +1090,7 @@
 				if (!response.ok) {
 					throw new Error('Network response was not ok');
 				}
-				return response.json();
+				return response.text(); // Expecting plain text response
 			})
 			.then(data => {
 				console.log('Control data pushed:', data);
@@ -1102,21 +1102,24 @@
 		
 		function remoteMasterManager(){
 			const button = document.getElementById('btnApplyOutput');
-			button.disabled = !remoteCtrlEnable.checked; // Enable button if checkbox is checked
-			outputCtrlEnable.disabled = !remoteCtrlEnable.checked; // Enable checkbox if checkbox is checked
-			if(!remoteCtrlEnable.checked){
-				outputCtrlEnable.checked = false;
+			const remoteChkBox = document.getElementById('remoteCtrlEnable');
+			const outputChkBox = document.getElementById('outputCtrlEnable');
+			button.disabled = !remoteChkBox.checked; // Enable button if checkbox is checked
+			outputChkBox.disabled = !remoteChkBox.checked; // Enable checkbox if checkbox is checked
+			if(!remoteChkBox.checked){
+				outputChkBox.checked = false;
 				psuOutputManager();
 			}
-			pushRemoteControlEnable(remoteCtrlEnable.checked);
+			pushRemoteControlEnable(remoteChkBox.checked);
 		}
 		
 		function psuOutputManager(){
-			pushPsuOutputEnable(outputCtrlEnable.checked);
+			const outputChkBox = document.getElementById('outputCtrlEnable');
+			pushPsuOutputEnable(outputChkBox.checked);
 		}
 		
 		function pushRemoteControlEnable(bEnable){
-			fetch(uri, {
+			fetch('/setmaster', {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json'
@@ -1129,7 +1132,7 @@
 				if (!response.ok) {
 					throw new Error('Network response was not ok');
 				}
-				return response.json();
+				return response.text(); // Expecting plain text response
 			})
 			.then(data => {
 				console.log('Control data pushed:', data);
@@ -1140,7 +1143,7 @@
 		}
 		
 		function pushPsuOutputEnable(bEnable){
-			fetch(uri, {
+			fetch('/setoutputon', {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json'
@@ -1153,7 +1156,7 @@
 				if (!response.ok) {
 					throw new Error('Network response was not ok');
 				}
-				return response.json();
+				return response.text(); // Expecting plain text response
 			})
 			.then(data => {
 				console.log('Control data pushed:', data);

@@ -4,8 +4,8 @@
 #include <ESPAsyncTCP.h>
 #include <ESPAsyncWebSrv.h>
 #include <SoftwareSerial.h>
-#include <TaskScheduler.h>
 #include <ArduinoOTA.h>
+#include <ArduinoJson.h>
 
 // EEPROM addresses for SSID, password, IP, subnet mask, and gateway
 #define SSID_ADDR 0
@@ -36,20 +36,24 @@ const int TXPin = D5; // Wemos D1 Mini TX pin
 const int virtualSerialTimeoutVal = 500;
 
 #define _TASK_THREAD_SAFE        // Enable additional checking for thread safety
+#define _TASK_PRIORITY
+#include <TaskScheduler.h>
 
-Task taskSendVoltage(500, TASK_FOREVER, &sendVoltageCommand);
-Task taskSendCurrent(600, TASK_FOREVER, &sendCurrentCommand);
-Task taskArduinoOTA(200, TASK_FOREVER, &otaHandler);
-Task taskThreadSafeVariable(TASK_IMMEDIATE,TASK_ONCE, &threadSafeVariable);
-Task taskNewOutputValues(TASK_IMMEDIATE,TASK_ONCE, &sendNewOutputValues);
-Task taskSetRemoteAsMaster(TASK_IMMEDIATE,TASK_ONCE, &setPcAsMaster);
-Task taskUnSetRemoteAsMaster(TASK_IMMEDIATE,TASK_ONCE, &unsetPcAsMaster);
-Task taskSetOutputEnable(TASK_IMMEDIATE,TASK_ONCE, &setOutputEnable);
-Task taskSetOutputDisable(TASK_IMMEDIATE,TASK_ONCE, &setOutputDisable);
+#define MAIN_TASKS_DELAY 1000
 
+Scheduler runner, criticalRunner;
+
+Task taskSendVoltage(MAIN_TASKS_DELAY, TASK_FOREVER, &sendVoltageCommand, &runner);
+Task taskSendCurrent(MAIN_TASKS_DELAY, TASK_FOREVER, &sendCurrentCommand, &runner);
+Task taskArduinoOTA(200, TASK_FOREVER, &otaHandler, &runner);
+Task taskThreadSafeVariable(TASK_IMMEDIATE,TASK_ONCE, &threadSafeVariable, &runner);
+Task taskNewOutputValues(TASK_IMMEDIATE,TASK_ONCE, &sendNewOutputValues, &criticalRunner);
+Task taskSetRemoteAsMaster(TASK_IMMEDIATE,TASK_ONCE, &setPcAsMaster, &criticalRunner);
+Task taskUnSetRemoteAsMaster(TASK_IMMEDIATE,TASK_ONCE, &unsetPcAsMaster, &criticalRunner);
+Task taskSetOutputEnable(TASK_IMMEDIATE,TASK_ONCE, &setOutputEnable, &criticalRunner);
+Task taskSetOutputDisable(TASK_IMMEDIATE,TASK_ONCE, &setOutputDisable, &criticalRunner);
 
 SoftwareSerial virtualSerial(RXPin, TXPin);
-Scheduler runner;
 AsyncWebServer server(80);
 
 String voltageCommand = "<12000000000>"; // Read voltage command
@@ -94,7 +98,7 @@ void setOutputDisable(){
 bool controlSupplyOutput(bool enable) {
   // <07000000000> to enable output, <08000000000> to disable output
   String command = enable ? "<07000000000>" : "<08000000000>";
-  String response = sendCommandAndWait(command);
+  String response = sendCommandAndWait(command, 2000);
   if (response.isEmpty()) {
     Serial.println("No ACK/response for command: " + command);
     return false; // Command failed
@@ -120,7 +124,7 @@ bool connectPcAsMaster() {
   };
 
   for (int i = 0; i < sizeof(commands) / sizeof(commands[0]); ++i) {
-    String response = sendCommandAndWait(commands[i]);
+    String response = sendCommandAndWait(commands[i], 2000);
     if (response.isEmpty()) {
       Serial.println("No ACK/response for command: " + commands[i]);
       pcIsMaster = false; // Reset flag if any command fails
@@ -142,7 +146,7 @@ bool disconnectPcAsMaster() {
   };
 
   for (int i = 0; i < sizeof(commands) / sizeof(commands[0]); ++i) {
-    String response = sendCommandAndWait(commands[i]);
+    String response = sendCommandAndWait(commands[i], 2000);
     if (response.isEmpty()) {
       Serial.println("No ACK/response for command: " + commands[i]);
       pcIsMaster = false; // Reset flag if command fails
@@ -175,7 +179,7 @@ void sendNewOutputVoltage(String newOutVoltage) {
 
   // Format: <11VVVvvv000>
   String formattedVoltage = "<11" + intPart + decPart + "000>";
-  String response = sendCommandAndWait(formattedVoltage);
+  String response = sendCommandAndWait(formattedVoltage, 2000);
   if (response.isEmpty()) {
     Serial.println("No ACK/response for voltage command: " + formattedVoltage);
   }
@@ -201,40 +205,56 @@ void sendNewOutputCurrent(String newOutCurrent){
 
   // Format: <13CCCccc000>
   String formattedCurrent = "<13" + intPart + decPart + "000>";
-  String response = sendCommandAndWait(formattedCurrent);
+  String response = sendCommandAndWait(formattedCurrent, 2000);
   if (response.isEmpty()) {
     Serial.println("No ACK/response for current command: " + formattedCurrent);
   }
 }
 
 void sendVoltageCommand() {
-  String response = sendCommandAndWait(voltageCommand);
+  String response = sendCommandAndWait(voltageCommand, -1);
   if (!response.isEmpty()) {
     handleVoltageCommand(response);
   }
 }
 
 void sendCurrentCommand() {
-  String response = sendCommandAndWait(currentCommand);
+  String response = sendCommandAndWait(currentCommand, -1);
   if (!response.isEmpty()) {
     handleCurrentCommand(response);
   }
 }
 
-String sendCommandAndWait(String command) {
+String sendCommandAndWait(String command, int timeout) {
+  int timeoutVal;
+  if(timeout == -1){
+    timeoutVal = virtualSerialTimeoutVal;
+  }
+  else{
+    timeoutVal = timeout;
+  }
+  
   static volatile bool inUse = false;
   while (__atomic_test_and_set(&inUse, __ATOMIC_ACQUIRE)) {
     delay(1); // Wait until the function is free
   }
 
-  Serial.println("Commande envoyée: " + command);
+  Serial.println("Flag taken!");
+
+  // Clear any incoming data from the serial buffer
+  while (virtualSerial.available()) {
+      virtualSerial.read(); // Read and discard incoming data
+  }
+
   virtualSerial.print(command);
+  Serial.println("Commande envoyée: " + command);
   // Wait for response
   unsigned long startTime = millis();
   while (!virtualSerial.available()) {
-    if (millis() - startTime > virtualSerialTimeoutVal) { // Timeout after 2 seconds
+    if (millis() - startTime > timeoutVal) { // Timeout after 2 seconds
       Serial.println("Timeout occurred while waiting for response from Power supply.");
       __atomic_clear(&inUse, __ATOMIC_RELEASE);
+      Serial.println("Flag released on error!");
       return "";
     }
   }
@@ -251,6 +271,7 @@ String sendCommandAndWait(String command) {
   response += '>'; // Add the closing '>' since readStringUntil does not include it
   Serial.println("Power supply response read!");
   __atomic_clear(&inUse, __ATOMIC_RELEASE);
+  Serial.println("Flag released on success!");
   return response;
 }
 
@@ -296,16 +317,18 @@ void setup() {
   connectWiFi();
   
   // Initialize tasks
-  runner.init();
-  runner.addTask(taskSendVoltage);
-  runner.addTask(taskSendCurrent);
-  runner.addTask(taskArduinoOTA);
-  runner.addTask(taskThreadSafeVariable);
-  runner.addTask(taskNewOutputValues);
-  runner.addTask(taskSetRemoteAsMaster);
-  runner.addTask(taskUnSetRemoteAsMaster);
-  runner.addTask(taskSetOutputEnable);
-  runner.addTask(taskSetOutputDisable);
+  //runner.init();
+  //runner.addTask(taskSendVoltage);
+  //runner.addTask(taskSendCurrent);
+  taskSendCurrent.delay(int(MAIN_TASKS_DELAY / 2));
+  //runner.addTask(taskArduinoOTA);
+  //runner.addTask(taskThreadSafeVariable);
+  //runner.addTask(taskNewOutputValues);
+  //runner.addTask(taskSetRemoteAsMaster);
+  //runner.addTask(taskUnSetRemoteAsMaster);
+  //runner.addTask(taskSetOutputEnable);
+  //runner.addTask(taskSetOutputDisable);
+  runner.setHighPriorityScheduler(&criticalRunner); 
 
   // Check if stored IP, subnet mask, or gateway in EEPROM are missing
   String storedIP = readStringFromEEPROM(IP_ADDR);
@@ -337,13 +360,65 @@ void setup() {
     handleSetConfig(request);
   });
   server.on("/setoutput", HTTP_POST, [](AsyncWebServerRequest *request) {
-    handleNewOuput(request);
+    // Handle the request
+    request->send(200, "text/plain", "OK");
+  }, NULL, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+    // This function is called when data is received
+    StaticJsonDocument<200> doc; // Adjust size as needed
+    DeserializationError error = deserializeJson(doc, data);
+
+    if (error) {
+      Serial.print(F("deserializeJson() failed: "));
+      Serial.println(error.f_str());
+      return;
+    }
+
+    // Extract the voltage and current values
+    String newVoltage = doc["voltage"] | "";
+    String newCurrent = doc["current"] | "";
+
+    if (newVoltage.length() == 0 || newCurrent.length() == 0) {
+      Serial.println("Missing newVoltage or newCurrent in JSON");
+      return;
+    }
+
+    handleNewOuput(newVoltage, newCurrent);
   });
   server.on("/setmaster", HTTP_POST, [](AsyncWebServerRequest *request) {
-    handleRemoteCtrl(request);
+    // Handle the request
+    request->send(200, "text/plain", "OK");
+  }, NULL, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+    // This function is called when data is received
+    StaticJsonDocument<200> doc; // Adjust size as needed
+    DeserializationError error = deserializeJson(doc, data);
+
+    if (error) {
+      Serial.print(F("deserializeJson() failed: "));
+      Serial.println(error.f_str());
+      return;
+    }
+
+    // Extract the boolean value
+    bool remoteIsMaster = doc["remoteIsMaster"];
+    handleRemoteCtrl(remoteIsMaster);
   });
   server.on("/setoutputon", HTTP_POST, [](AsyncWebServerRequest *request) {
-    handleOutputState(request);
+    // Handle the request
+    request->send(200, "text/plain", "OK");
+  }, NULL, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+    // This function is called when data is received
+    StaticJsonDocument<200> doc; // Adjust size as needed
+    DeserializationError error = deserializeJson(doc, data);
+
+    if (error) {
+      Serial.print(F("deserializeJson() failed: "));
+      Serial.println(error.f_str());
+      return;
+    }
+
+    // Extract the boolean value
+    bool outputIsEnabled = doc["outputIsEnabled"];
+    handleOutputState(outputIsEnabled);
   });
   server.on("/chart.js", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (LittleFS.exists("/chart.js")) {
@@ -392,8 +467,8 @@ void setup() {
   }
 
   // Enable tasks
-  taskSendVoltage.enable();
-  taskSendCurrent.enable();
+  //taskSendVoltage.enable();
+  //taskSendCurrent.enable();
   taskArduinoOTA.enable();
   taskThreadSafeVariable.enable();
   //taskNewOutputValues.enable();
@@ -533,52 +608,32 @@ void handleSetConfig(AsyncWebServerRequest *request) {
   }
 }
 
-void handleNewOuput(AsyncWebServerRequest *request){
-  Serial.println("Handling new output request...");
-  String newVoltage = request->arg("newVoltage");
-  String newCurrent = request->arg("newCurrent");
-
-  Serial.println("Handling new output request... 2");
+void handleNewOuput(String newVoltage, String newCurrent) {
+  if (newVoltage.length() == 0 || newCurrent.length() == 0) {
+    Serial.println("Missing newVoltage or newCurrent in input");
+    return;
+  }
 
   newOutputVoltage = String(newVoltage);
   newOutputCurrent = String(newCurrent);
-
-  taskNewOutputValues.enableIfNot();
   
-  //sendNewOutputVoltage(newVoltage);
-  //sendNewOutputCurrent(newCurrent);
-
-  Serial.println("Handling new output request... 3");
-
-  request->send(200, "text/plain", "OK");
+  taskNewOutputValues.restart(); // Ensure it runs immediately
 }
 
-void handleRemoteCtrl(AsyncWebServerRequest *request){
-  Serial.println("Remote ctrl request...");
-  String remoteIsMaster = request->arg("remoteIsMaster");
-
-  if(remoteIsMaster == "true"){
-    taskSetRemoteAsMaster.enableIfNot();
+void handleRemoteCtrl(bool receivedData){
+  if (receivedData) {
+    taskSetRemoteAsMaster.restart(); // Ensure it runs immediately
+  } else {
+    taskUnSetRemoteAsMaster.restart(); // Ensure it runs immediately
   }
-  else{
-    taskUnSetRemoteAsMaster.enableIfNot();
-  }
-
-  request->send(200, "text/plain", "OK");
 }
 
-void handleOutputState(AsyncWebServerRequest *request){
-  Serial.println("Output State Request...");
-  String outputIsEnabled = request->arg("outputIsEnabled");
-
-  if(outputIsEnabled == "true"){
-    taskSetOutputEnable.enableIfNot();
+void handleOutputState(bool receivedData){
+  if (receivedData) {
+    taskSetOutputEnable.restart(); // Ensure it runs immediately
+  } else {
+    taskSetOutputDisable.restart(); // Ensure it runs immediately
   }
-  else{
-    taskSetOutputDisable.enableIfNot();
-  }
-
-  request->send(200, "text/plain", "OK");
 }
 
 String readStringFromEEPROM(int addr) {
