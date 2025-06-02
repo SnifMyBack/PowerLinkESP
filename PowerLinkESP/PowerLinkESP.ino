@@ -303,7 +303,7 @@ void setup() {
   Serial.begin(115200);
   // Initialize SoftwareSerial
   virtualSerial.begin(9600);
-  virtualSerial.setTimeout(2000);
+  virtualSerial.setTimeout(virtualSerialTimeoutVal);
   // Initialize EEPROM
   EEPROM.begin(512);
 
