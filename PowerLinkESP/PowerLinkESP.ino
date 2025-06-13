@@ -32,10 +32,14 @@ String voltageCommand = "<12000000000>"; // Read voltage command
 String currentCommand = "<14000000000>"; // Read current command
 
 /*-------------- GLOBAL VARIABLES --------------*/
-float voltageValue = 0.0;
-float currentValue = 0.0;
-float powerValue = 0.0;
-bool pcIsMaster = false; // Flag to check if PC is master
+float gReadVoltageValue = 0.0;
+float gReadCurrentValue = 0.0;
+float gReadPowerValue = 0.0;
+bool gPcIsMaster = false; // Flag to check if PC is master
+int gReformMinutes = -1; // Default reform minutes, -1 means no reform
+int gReformMinutesCounter = 0; // Counter for reforming process
+float gSetVoltage = 0.0; // Default set voltage
+float gSetCurrent = 0.0; // Default set current
 
 void connectWiFi() {
   Serial.println("Connecting to default WiFi...");
@@ -121,7 +125,7 @@ bool disconnectPcAsMaster(uint8_t nbOfTry){
 }
 
 bool sendMasterCommand() {
-  if(pcIsMaster){
+  if(gPcIsMaster){
     return true;
   }
   // List of commands to send
@@ -133,17 +137,17 @@ bool sendMasterCommand() {
     String response = sendCommandAndWait(commands[i], 500);
     if (response.isEmpty()) {
       Serial.println("No ACK/response for command: " + commands[i]);
-      pcIsMaster = false; // Reset flag if any command fails
+      gPcIsMaster = false; // Reset flag if any command fails
       return false;
     }
     // Optionally, check for specific ACK content here
   }
-  pcIsMaster = true; // Set flag indicating PC is master
+  gPcIsMaster = true; // Set flag indicating PC is master
   return true;
 }
 
 bool sendMasterDisconnectCommand() {
-  if(!pcIsMaster){
+  if(!gPcIsMaster){
     return true;
   }
   // List of commands to send for disconnection
@@ -155,12 +159,12 @@ bool sendMasterDisconnectCommand() {
     String response = sendCommandAndWait(commands[i], 500);
     if (response.isEmpty()) {
       Serial.println("No ACK/response for command: " + commands[i]);
-      pcIsMaster = false; // Reset flag if command fails
+      gPcIsMaster = false; // Reset flag if command fails
       return false;
     }
     // Optionally, check for specific ACK content here
   }
-  pcIsMaster = false; // Reset flag indicating PC is no longer master
+  gPcIsMaster = false; // Reset flag indicating PC is no longer master
   return true;
 }
 
@@ -194,7 +198,7 @@ bool controlSupplyOutput(bool enable) {
 }
 
 bool sendNewOutputVoltage(String newOutVoltage, uint8_t nbTry) {
-  if(!pcIsMaster){
+  if(!gPcIsMaster){
     if(!connectPcAsMaster(3)){
       Serial.println("Failed to connect PC as master. Cannot send new output voltage.");
       return false;
@@ -217,6 +221,7 @@ bool sendNewOutputVoltage(String newOutVoltage, uint8_t nbTry) {
   for(uint8_t i = 0; i < nbTry; ++i) {
     String response = sendCommandAndWait(formattedVoltage, -1);
     if (!response.isEmpty()) {
+      gSetVoltage = newOutVoltage.toFloat(); // Update the global variable with the new voltage
       return true;
     }
     Serial.println("No ACK/response for voltage command: " + formattedVoltage + " (try " + String(i+1) + ")");
@@ -226,7 +231,7 @@ bool sendNewOutputVoltage(String newOutVoltage, uint8_t nbTry) {
 }
 
 bool sendNewOutputCurrent(String newOutCurrent, uint8_t nbTry) {
-  if(!pcIsMaster){
+  if(!gPcIsMaster){
     if(!connectPcAsMaster(3)){
       Serial.println("Failed to connect PC as master. Cannot send new output current.");
       return false;
@@ -248,6 +253,7 @@ bool sendNewOutputCurrent(String newOutCurrent, uint8_t nbTry) {
   for(uint8_t i = 0; i < nbTry; ++i) {
     String response = sendCommandAndWait(formattedCurrent, -1);
     if (!response.isEmpty()) {
+      gSetCurrent = newOutCurrent.toFloat(); // Update the global variable with the new current
       return true;
     }
     Serial.println("No ACK/response for current command: " + formattedCurrent + " (try " + String(i+1) + ")");
@@ -260,18 +266,18 @@ void handleVoltageCommand(String response) {
   // Extract data bits from the response
   int voltage = response.substring(3, 9).toInt();   //Correction from (4,9) to (3,9) as some power supply can get up to 800Vdc!
   // Calculate voltage value (assuming data bits are in the format provided)
-  voltageValue = voltage / 1000.0;
+  gReadVoltageValue = voltage / 1000.0;
 }
 
 void handleCurrentCommand(String response) {
   // Extract data bits from the response
   int current = response.substring(4, 9).toInt();
   // Calculate current value (assuming data bits are in the format provided)
-  currentValue = current / 1000.0;
+  gReadCurrentValue = current / 1000.0;
 }
 
 void handlePowerCommand(){
-  powerValue = voltageValue * currentValue;
+  gReadPowerValue = gReadVoltageValue * gReadCurrentValue;
 }
 
 void sendVoltageCommand() {
@@ -306,7 +312,7 @@ String sendCommandAndWait(String command, int timeout) {
     delay(1); // Wait until the function is free
   }
 
-  Serial.println("Flag taken!");
+  //Serial.println("Flag taken!");
 
   // Clear any incoming data from the serial buffer
   while (virtualSerial.available()) {
@@ -321,7 +327,7 @@ String sendCommandAndWait(String command, int timeout) {
     if (millis() - startTime > timeoutVal) { // Timeout after 2 seconds
       Serial.println("Timeout occurred while waiting for response from Power supply.");
       __atomic_clear(&inUse, __ATOMIC_RELEASE);
-      Serial.println("Flag released on error!");
+      //Serial.println("Flag released on error!");
       return "";
     }
   }
@@ -336,9 +342,9 @@ String sendCommandAndWait(String command, int timeout) {
   // Now read the rest of the response including '<'
   String response = "<" + virtualSerial.readStringUntil('>');
   response += '>'; // Add the closing '>' since readStringUntil does not include it
-  Serial.println("Power supply response read!");
+  //Serial.println("Power supply response read!");
   __atomic_clear(&inUse, __ATOMIC_RELEASE);
-  Serial.println("Flag released on success!");
+  //Serial.println("Flag released on success!");
   return response;
 }
 
@@ -356,7 +362,7 @@ void uriSetup(){
     sendVoltageCommand();
     sendCurrentCommand();
     sendPowerCommand();
-    String data = "{\"voltage\": " + String(voltageValue, 3) + ", \"current\": " + String(currentValue, 3) + ", \"power\": " + String(powerValue, 3) + "}";
+    String data = "{\"voltage\": " + String(gReadVoltageValue, 3) + ", \"current\": " + String(gReadCurrentValue, 3) + ", \"power\": " + String(gReadPowerValue, 3) + "}";
     server.send(200, "application/json", data);
   });
   server.on("/config", HTTP_GET, []() {
@@ -528,6 +534,37 @@ void uriSetup(){
     }
     server.send(200, "text/plain", "OK");
   });
+  server.on("/setreform", HTTP_POST, []() {
+    if (server.hasArg("plain") == false) {
+      server.send(400, "text/plain", "Body not received");
+      return;
+    }
+    String body = server.arg("plain");
+    StaticJsonDocument<200> doc;
+    DeserializationError error = deserializeJson(doc, body);
+
+    if (error) {
+      Serial.print(F("deserializeJson() failed: "));
+      Serial.println(error.f_str());
+      server.send(400, "text/plain", "Invalid JSON");
+      return;
+    }
+
+    int intValue = doc["minutes"].as<int>();
+
+    if (intValue != -1 && gReformMinutes > 0) {
+      Serial.println("A reform is already in process.");
+      server.send(400, "text/plain", "A reform is already in process.");
+      return;
+    }
+    else if (intValue == 0) {
+      server.send(400, "text/plain", "Invalid reform minutes");
+      return;
+    }
+    Serial.println("New reform delay value: " + String(intValue));
+    gReformMinutes = intValue;
+    server.send(200, "text/plain", "OK");
+  });
   server.on("/chart.js", HTTP_GET, []() {
     if (LittleFS.exists("/chart.js")) {
       File file = LittleFS.open("/chart.js", "r");
@@ -618,9 +655,54 @@ void setup(void) {
   }
 }
 
+void disablePSU() {
+  // Disable the power supply output
+  if (!setOutputDisable(3)) {
+    Serial.println("Failed to disable power supply output.");
+  }
+  // Set voltage and current to 0V and 0A
+  if (!sendNewOutputVoltage("0.000", 3)) {
+    Serial.println("Failed to set output voltage to 0V.");
+  }
+  if (!sendNewOutputCurrent("0.000", 3)) {
+    Serial.println("Failed to set output current to 0A.");
+  }
+}
+
 void loop(void) {
   server.handleClient();
   MDNS.update();
+  ArduinoOTA.handle();
+
+  static unsigned long lastReformMillis = 0;
+  static bool firstReformLoop = false;
+  if (gReformMinutes > 0) {
+    if(!firstReformLoop){
+      firstReformLoop = true;
+      Serial.println("Reforming process started!");
+    }
+    // Only proceed if the read voltage is equal or higher than the set voltage
+    if (gReadVoltageValue >= gSetVoltage) {
+      unsigned long now = millis();
+      if (now - lastReformMillis >= 60000) { // 60,000 ms = 1 minute
+        lastReformMillis = now;
+        gReformMinutesCounter++;
+        Serial.println("Reforming process in progress... At minute: " + String(gReformMinutesCounter) + "/" + String(gReformMinutes));
+        if (gReformMinutesCounter >= gReformMinutes) {
+          disablePSU(); // Disable the power supply if no reform is in process
+          Serial.println("Reforming process completed.");
+          gReformMinutes = -1; // Reset reform minutes
+          gReformMinutesCounter = 0; // Reset counter
+        }
+      }
+    }
+  }
+  else if (gReformMinutes == -1 && gReformMinutesCounter > 0) {
+    disablePSU(); // Disable the power supply if no reform is in process
+    Serial.println("Reforming process was interrupted!");
+    // Reset reform minutes and counter if no reform is in process
+    gReformMinutesCounter = 0;
+  }
 }
 
 String readStringFromEEPROM(int addr) {

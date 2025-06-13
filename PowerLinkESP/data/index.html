@@ -491,10 +491,10 @@
 		<strong>POWER ALARM!</strong> Indicates that Power Threshold is reached!
 	</div>
 	<div class="tab">
+		<button class="tablinks" onclick="openTab(event, 'psuControl')" id="defaultOpen">Control</button>
 		<button class="tablinks" onclick="openTab(event, 'ChartDash')">All Charts</button>
 		<button class="tablinks" onclick="openTab(event, 'ChartConfig')">Charts Configuration</button>
 		<button class="tablinks" onclick="openTab(event, 'alarmsConfig')">Alarms</button>
-		<button class="tablinks" onclick="openTab(event, 'psuControl')" id="defaultOpen">Control</button>
 	</div>
 	<div id="ChartDash" class="tabcontent">
 		<div class="wrapper">
@@ -647,13 +647,17 @@
 	</div>
 	<div id="psuControl" class="tabcontent output-config">
 		<div class="output-config-box">
-			<h2>PSU Output Control</h2>
+			<h2>Power Supply Unit (PSU) Control</h2>
+			<p>Use the controls below to manage the PSU output and reforming process.</p>
+			<div class="tooltip">
+				<label for="lblPcMaster">Remote control enable : </label>
+				<span class="tooltiptext">Enable the remote control of the PSU.</span>
+				<input type="checkbox" id="remoteCtrlEnable" onclick="remoteMasterManager()"/>
+			</div>
+		</div>
+		<div id="manualPsuControl" class="output-config-box">
+			<h2>Manual PSU Control</h2>
 			<div class="input-group" style="display: block;">
-				<div class="tooltip">
-					<label for="lblPcMaster">Remote control : </label>
-					<span class="tooltiptext">Enable the remote control of the PSU.</span>
-					<input type="checkbox" id="remoteCtrlEnable" onclick="remoteMasterManager()">
-				</div>
 				<div class="tooltip">
 					<label for="outVoltage">Voltage (V) : </label>
 					<span class="tooltiptext">Set the maximum output voltage of the power supply.</span>
@@ -670,8 +674,44 @@
 				<div class="tooltip">
 					<label for="lblOutEnable">Output enable : </label>
 					<span class="tooltiptext">Enable the output of the PSU.</span>
-					<input type="checkbox" id="outputCtrlEnable" onclick="psuOutputManager()" disabled>
+					<input type="checkbox" id="outputCtrlEnable" onclick="psuOutputManager()" disabled/>
 				</div>
+			</div>
+		</div>
+		<div id="autoReformControl" class="output-config-box">
+			<h2>Automatic Capacitor Reforming</h2>
+			<div class="input-group" style="display: block;">
+				<div class="tooltip">
+					<label for="reformMaxVoltage">Max Voltage (V):</label>
+					<span class="tooltiptext">Set the maximum voltage to reach during reforming.</span>
+					<input type="number" id="reformMaxVoltage" value="50" min="0" max="1000" step="0.1" disabled>
+				</div>
+				<div class="tooltip">
+					<label for="reformCurrent">Current (mA):</label>
+					<span class="tooltiptext">Set the reforming current (in 10mA steps up to 100mA).</span>
+					<select id="reformCurrent" disabled>
+						<option value="10">10</option>
+						<option value="20">20</option>
+						<option value="30">30</option>
+						<option value="40">40</option>
+						<option value="50">50</option>
+						<option value="60">60</option>
+						<option value="70">70</option>
+						<option value="80">80</option>
+						<option value="90">90</option>
+						<option value="100">100</option>
+					</select>
+				</div>
+				<div class="tooltip">
+					<label for="reformTimeHours">Time (hours):</label>
+					<span class="tooltiptext">Set the total reforming time in hours.</span>
+					<input type="number" id="reformTimeHours" value="1" min="0.1" max="100" step="0.1" disabled>
+				</div>
+				<div class="tooltip">
+					<button id="btnSendReform" class="button output-config" onclick="confirmReformConfig()" disabled>Start Reform</button>
+					<button id="btnStopReform" class="button output-config" onclick="stopReform()" disabled>Stop Reform</button>
+				</div>
+				<div id="reformStatus" style="margin-top:10px; color:#e88504; font-family:monospace;"></div>
 			</div>
 		</div>
 	</div>
@@ -1062,11 +1102,11 @@
 		function newOutputValues(){
 			var newOutVoltage = parseFloat(document.getElementById('outVoltage').value);
 			var newOutCurrent = parseFloat(document.getElementById('outCurrent').value);
-			if (isNaN(newOutVoltage) || newOutVoltage <= 0) {
+			if (isNaN(newOutVoltage) || newOutVoltage < 0.0) {
 				alert("Please enter a valid positive number.");
 				return;
 			}
-			if (isNaN(newOutCurrent) || newOutCurrent <= 0) {
+			if (isNaN(newOutCurrent) || newOutCurrent < 0.0) {
 				alert("Please enter a valid positive number.");
 				return;
 			}
@@ -1088,6 +1128,9 @@
 			})
 			.then(response => {
 				if (!response.ok) {
+					// Set input boxes to 0.0 if unsuccessful
+					document.getElementById('outVoltage').value = "0.0";
+					document.getElementById('outCurrent').value = "0.0";
 					throw new Error('Network response was not ok');
 				}
 				return response.text(); // Expecting plain text response
@@ -1097,15 +1140,25 @@
 			})
 			.catch(error => {
 				console.error('Error pushing control data:', error);
+				// Set input boxes to 0.0 if unsuccessful
+				document.getElementById('outVoltage').value = "0.0";
+				document.getElementById('outCurrent').value = "0.0";
 			});
 		}
 		
 		function remoteMasterManager(){
-			const button = document.getElementById('btnApplyOutput');
 			const remoteChkBox = document.getElementById('remoteCtrlEnable');
 			const outputChkBox = document.getElementById('outputCtrlEnable');
-			button.disabled = !remoteChkBox.checked; // Enable button if checkbox is checked
-			outputChkBox.disabled = !remoteChkBox.checked; // Enable checkbox if checkbox is checked
+			const psuSections = [
+				document.getElementById('manualPsuControl'),
+				document.getElementById('autoReformControl')
+			];
+			const inputs = psuSections.flatMap(section => Array.from(section.querySelectorAll('input, button, select')));
+			inputs.forEach(el => {
+				if (el !== remoteChkBox) {
+					el.disabled = !remoteChkBox.checked;
+				}
+			});
 			if(!remoteChkBox.checked){
 				outputChkBox.checked = false;
 				psuOutputManager();
@@ -1163,6 +1216,59 @@
 			})
 			.catch(error => {
 				console.error('Error pushing control data:', error);
+			});
+		}
+
+		function confirmReformConfig() {
+			// Set output voltage and current input boxes to match reform config values
+			document.getElementById('outVoltage').value = document.getElementById('reformMaxVoltage').value;
+			document.getElementById('outCurrent').value = (parseFloat(document.getElementById('reformCurrent').value) / 1000).toFixed(3);
+
+			if (confirm("⚠️ WARNING: Starting the reforming process can be dangerous!\n\nEnsure all safety precautions are taken before proceeding.\n\nDo you want to continue?")) {
+				const outputChkBox = document.getElementById('outputCtrlEnable');
+				if (!outputChkBox.checked) {
+					outputChkBox.checked = true; // Enable output if not already enabled
+				}
+				psuOutputManager()
+				newOutputValues();
+				sendReformSimple(document.getElementById('reformTimeHours').value);
+			}
+		}
+
+		function stopReform() {
+			document.getElementById('outVoltage').value = 0.0;
+			document.getElementById('outCurrent').value = 0.0;
+			const outputChkBox = document.getElementById('outputCtrlEnable');
+			if (outputChkBox.checked) {
+				outputChkBox.checked = false; // Disable output if it is enabled
+			}
+			psuOutputManager()
+			newOutputValues();
+			sendReformSimple(-1); // Send -1 to stop reforming
+		}
+
+		function sendReformSimple(hours) {
+			if (isNaN(hours) || hours <= 0) {
+				document.getElementById('reformStatus').textContent = "Please enter a valid value for time.";
+				return;
+			}
+			const minutes = Math.round(hours * 60);
+			fetch('/setreform', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ minutes: minutes })
+			})
+			.then(response => {
+				if (!response.ok) {
+					throw new Error('Network response was not ok');
+				}
+				return response.text(); // Expecting plain text response
+			})
+			.then(msg => {
+				document.getElementById('reformStatus').textContent = "Reform config sent.";
+			})
+			.catch(error => {
+				document.getElementById('reformStatus').textContent = "Failed to send: " + error;
 			});
 		}
 		
