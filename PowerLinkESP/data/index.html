@@ -1131,7 +1131,9 @@
 					// Set input boxes to 0.0 if unsuccessful
 					document.getElementById('outVoltage').value = "0.0";
 					document.getElementById('outCurrent').value = "0.0";
-					throw new Error('Network response was not ok');
+					return response.text().then(errorMsg => {
+						throw new Error(errorMsg || 'Network response was not ok');
+					});
 				}
 				return response.text(); // Expecting plain text response
 			})
@@ -1183,7 +1185,9 @@
 			})
 			.then(response => {
 				if (!response.ok) {
-					throw new Error('Network response was not ok');
+					return response.text().then(errorMsg => {
+						throw new Error(errorMsg || 'Network response was not ok');
+					});
 				}
 				return response.text(); // Expecting plain text response
 			})
@@ -1207,7 +1211,9 @@
 			})
 			.then(response => {
 				if (!response.ok) {
-					throw new Error('Network response was not ok');
+					return response.text().then(errorMsg => {
+						throw new Error(errorMsg || 'Network response was not ok');
+					});
 				}
 				return response.text(); // Expecting plain text response
 			})
@@ -1219,19 +1225,22 @@
 			});
 		}
 
-		function confirmReformConfig() {
+		async function confirmReformConfig() {
 			// Set output voltage and current input boxes to match reform config values
 			document.getElementById('outVoltage').value = document.getElementById('reformMaxVoltage').value;
 			document.getElementById('outCurrent').value = (parseFloat(document.getElementById('reformCurrent').value) / 1000).toFixed(3);
 
 			if (confirm("⚠️ WARNING: Starting the reforming process can be dangerous!\n\nEnsure all safety precautions are taken before proceeding.\n\nDo you want to continue?")) {
+				const result = await sendReformSimple(document.getElementById('reformTimeHours').value);
+				if(result === "Failed"){
+					return; // If sending reform config failed, do not proceed
+				}
 				const outputChkBox = document.getElementById('outputCtrlEnable');
 				if (!outputChkBox.checked) {
 					outputChkBox.checked = true; // Enable output if not already enabled
 				}
 				psuOutputManager()
 				newOutputValues();
-				sendReformSimple(document.getElementById('reformTimeHours').value);
 			}
 		}
 
@@ -1248,27 +1257,36 @@
 		}
 
 		function sendReformSimple(hours) {
-			if (isNaN(hours) || hours <= 0) {
+			if (isNaN(hours)) {
 				document.getElementById('reformStatus').textContent = "Please enter a valid value for time.";
-				return;
+				return "Failed";
 			}
-			const minutes = Math.round(hours * 60);
-			fetch('/setreform', {
+			let minutes;
+			if (hours == -1) {
+				minutes = -1; // Special case for stopping reform
+			} else {
+				minutes = Math.round(hours * 60);
+			}
+			return fetch('/setreform', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ minutes: minutes })
 			})
 			.then(response => {
 				if (!response.ok) {
-					throw new Error('Network response was not ok');
+					return response.text().then(errorMsg => {
+						throw new Error(errorMsg || 'Network response was not ok');
+					});
 				}
 				return response.text(); // Expecting plain text response
 			})
 			.then(msg => {
 				document.getElementById('reformStatus').textContent = "Reform config sent.";
+				return msg;
 			})
 			.catch(error => {
-				document.getElementById('reformStatus').textContent = "Failed to send: " + error;
+				document.getElementById('reformStatus').textContent = error;
+				return "Failed";
 			});
 		}
 		
